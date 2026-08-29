@@ -1,0 +1,21 @@
+# --- Alpaca ---------------------------------------------------------------
+alpaca-py>=0.33.0          # market data + account + order placement
+alpaca-mcp-server>=2.0.0   # official MCP server (execution gateway)
+mcp>=1.2.0                 # MCP client used by the agent layer
+
+# --- Quantitative core ----------------------------------------------------
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11                # distributions, chi-squared tests, optimisation
+statsmodels>=0.14          # OLS betas, Ljung-Box, stationarity diagnostics
+arch>=6.3                  # GARCH(1,1) maximum-likelihood estimation
+
+# --- Cognitive layer ------------------------------------------------------
+anthropic>=0.40.0          # swap or add `openai` if you prefer
+
+# --- Interface ------------------------------------------------------------
+streamlit>=1.35
+plotly>=5.20
+
+# --- Environment ----------------------------------------------------------
+python-dotenv>=1.0
