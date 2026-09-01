@@ -227,6 +227,8 @@ def beta_weighted_delta(
 class RiskReport:
     """Everything the guardrail check and the dashboard need, in one object."""
 
+    # All VaR/CVaR figures below are fractions of ACCOUNT EQUITY, already
+    # adjusted for how much of the account is actually invested.
     equity: float
     invested: float
     var_parametric: float
@@ -235,6 +237,11 @@ class RiskReport:
     cvar: float
     net_delta: float
     n_observations: int
+
+    @property
+    def gross_leverage(self) -> float:
+        """Invested notional divided by equity. Below 1.0 means cash on hand."""
+        return self.invested / self.equity if self.equity else 0.0
 
     @property
     def var_headline(self) -> float:
@@ -297,18 +304,33 @@ def build_risk_report(
         )
 
     weights = portfolio_weights(position_values)
+    invested = float(position_values.abs().sum())
+
+    # ------------------------------------------------------------------
+    # UNITS. The estimators above take NORMALISED weights (summing to 1), so
+    # they return VaR as a fraction of INVESTED NOTIONAL. The mandate, the
+    # dashboard and every dollar figure are expressed as a fraction of ACCOUNT
+    # EQUITY. Those two are only the same number when the book is 100% invested.
+    #
+    # Converting requires gross leverage = invested / equity. Skipping this step
+    # is a silent and dangerous bug: a 55%-invested book would report ~1.8x its
+    # true risk, the agent would hedge positions that were never in breach, and
+    # — worse — scaling the book down would not reduce the reported VaR at all,
+    # because proportional scaling leaves normalised weights unchanged.
+    # ------------------------------------------------------------------
+    gross_leverage = invested / float(equity)
 
     return RiskReport(
         equity=float(equity),
-        invested=float(position_values.abs().sum()),
+        invested=invested,
         var_parametric=parametric_var(
             rets, weights, confidence, student_t_df=student_t_df
-        ),
-        var_historical=historical_var(rets, weights, confidence),
+        ) * gross_leverage,
+        var_historical=historical_var(rets, weights, confidence) * gross_leverage,
         var_monte_carlo=monte_carlo_var(
             rets, weights, confidence, paths=mc_paths, student_t_df=student_t_df
-        ),
-        cvar=conditional_var(rets, weights, confidence),
+        ) * gross_leverage,
+        cvar=conditional_var(rets, weights, confidence) * gross_leverage,
         net_delta=beta_weighted_delta(rets, position_values, equity, benchmark),
         n_observations=len(rets),
     )

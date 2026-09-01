@@ -308,6 +308,52 @@ def test_full_risk_report():
 
 
 # ---------------------------------------------------------------------------
+# 10. Regression: VaR must be expressed in EQUITY terms, not invested notional
+# ---------------------------------------------------------------------------
+
+def test_var_scales_with_exposure():
+    """
+    Regression test for a real bug.
+
+    The VaR estimators take NORMALISED weights, so they return risk as a
+    fraction of invested notional. The mandate is a fraction of account equity.
+    Without converting by gross leverage, a half-invested book reported the same
+    VaR as a fully invested one — meaning the position-sizing loop could cut
+    exposure forever without the reported risk ever falling.
+
+    The invariant: halve the book, halve the VaR.
+    """
+    n = 600
+    bench = RNG.normal(0.0003, 0.009, n)
+    panel = pd.DataFrame({
+        "SPY": bench,
+        "AAPL": 1.10 * bench + RNG.normal(0, 0.008, n),
+        "NVDA": 1.90 * bench + RNG.normal(0, 0.020, n),
+    })
+    prices = 100.0 * np.exp(panel.cumsum())
+    equity = 100_000.0
+
+    full = pd.Series({"SPY": 30_000.0, "AAPL": 15_000.0, "NVDA": 10_000.0})
+    half = full * 0.5
+
+    r_full = build_risk_report(prices, full, equity, mc_paths=10_000)
+    r_half = build_risk_report(prices, half, equity, mc_paths=10_000)
+
+    ratio = r_half.var_headline / r_full.var_headline
+    assert 0.48 < ratio < 0.52, f"halving must halve VaR, got ratio {ratio:.3f}"
+
+    # And the dollar figure must be consistent with equity, not with notional.
+    assert abs(r_full.var_dollars - r_full.var_headline * equity) < 1e-6
+    assert abs(r_full.gross_leverage - full.sum() / equity) < 1e-9
+
+    print(f"  full book VaR    = {r_full.var_headline:.4%} "
+          f"(leverage {r_full.gross_leverage:.2f})")
+    print(f"  half book VaR    = {r_half.var_headline:.4%} "
+          f"(leverage {r_half.gross_leverage:.2f})")
+    print(f"  ratio            = {ratio:.4f}   expected 0.5000  ✓")
+
+
+# ---------------------------------------------------------------------------
 
 def main() -> int:
     tests = [
@@ -323,6 +369,7 @@ def main() -> int:
         ("GARCH recovers simulated parameters", test_garch_recovers_simulated_parameters),
         ("Edge signal fires in both directions", test_edge_signal_directions),
         ("End-to-end risk report", test_full_risk_report),
+        ("VaR scales with exposure (regression)", test_var_scales_with_exposure),
     ]
 
     failures = 0
