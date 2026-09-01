@@ -36,9 +36,26 @@ class PolicyVerdict:
 
 # Liquidity thresholds. An illiquid option is not a hedge: you can buy it, but
 # the price you would pay to get out of it in a crisis is unbounded, and the
-# quoted mid is fiction. These numbers are deliberately strict.
-MAX_SPREAD_PCT = 0.05        # bid/ask spread as a fraction of the mid
-MIN_OPEN_INTEREST = 500      # contracts
+# quoted mid is fiction.
+#
+# The thresholds depend on WHERE the quote came from, and this distinction is
+# not a loosening of standards — it is measuring the right thing.
+#
+#   opra       — real consolidated exchange quotes. A 5% spread on a liquid
+#                contract is genuinely wide, so the spread test is meaningful
+#                and strict.
+#   indicative — Alpaca's free synthetic feed. It does not publish real
+#                two-sided markets, so its spreads are wide by construction:
+#                SPY options, the most liquid contracts in existence and
+#                normally quoted a penny wide, come back at 25%. Applying the
+#                OPRA threshold here does not measure liquidity, it measures
+#                the feed. Open interest — which is real data either way —
+#                becomes the primary test, and the spread check is kept only
+#                as a sanity bound against a genuinely broken quote.
+MAX_SPREAD_PCT = 0.05
+MAX_SPREAD_PCT_INDICATIVE = 0.60
+MIN_OPEN_INTEREST = 500
+MIN_OPEN_INTEREST_INDICATIVE = 1_000   # stricter, since spread tells us little
 MIN_ABSOLUTE_BID = 0.05      # below this, the contract is effectively worthless
 
 
@@ -65,8 +82,22 @@ def midpoint(bid: float | None, ask: float | None) -> float | None:
     return round((bid + ask) / 2.0, 2)
 
 
-def check_liquidity(contract: dict, snapshot: dict) -> PolicyVerdict:
-    """Reject anything we could not exit in a hurry."""
+def check_liquidity(
+    contract: dict,
+    snapshot: dict,
+    quote_source: str = "opra",
+) -> PolicyVerdict:
+    """
+    Reject anything we could not exit in a hurry.
+
+    `quote_source` selects the threshold set — see the constants above for why
+    the indicative feed needs different ones. The source is recorded in the
+    refusal message so the audit log always shows which standard was applied.
+    """
+    indicative = quote_source.lower() == "indicative"
+    max_spread = MAX_SPREAD_PCT_INDICATIVE if indicative else MAX_SPREAD_PCT
+    min_oi = MIN_OPEN_INTEREST_INDICATIVE if indicative else MIN_OPEN_INTEREST
+
     bid, ask = snapshot.get("bid"), snapshot.get("ask")
 
     if bid is None or ask is None:
@@ -77,18 +108,23 @@ def check_liquidity(contract: dict, snapshot: dict) -> PolicyVerdict:
             "liquidity", f"bid {bid:.2f} below minimum {MIN_ABSOLUTE_BID:.2f}"
         )
 
+    # Open interest first on the indicative feed: it is real exchange data
+    # regardless of which quote feed you subscribe to, so it is the more
+    # trustworthy liquidity signal of the two.
+    oi = contract.get("open_interest", 0)
+    if oi < min_oi:
+        return PolicyVerdict.block(
+            "liquidity",
+            f"open interest {oi} below {min_oi} ({quote_source} feed)",
+        )
+
     sp = spread_pct(bid, ask)
     if sp is None:
         return PolicyVerdict.block("liquidity", f"unusable quote {bid}/{ask}")
-    if sp > MAX_SPREAD_PCT:
+    if sp > max_spread:
         return PolicyVerdict.block(
-            "liquidity", f"spread {sp:.1%} exceeds {MAX_SPREAD_PCT:.0%}"
-        )
-
-    oi = contract.get("open_interest", 0)
-    if oi < MIN_OPEN_INTEREST:
-        return PolicyVerdict.block(
-            "liquidity", f"open interest {oi} below {MIN_OPEN_INTEREST}"
+            "liquidity",
+            f"spread {sp:.1%} exceeds {max_spread:.0%} ({quote_source} feed)",
         )
 
     return PolicyVerdict.ok()
@@ -219,6 +255,7 @@ def evaluate(
     options_trading_level: int,
     mandate: RiskMandate,
     sentiment_veto: str = "",
+    quote_source: str = "opra",
 ) -> PolicyVerdict:
     """
     Run every gate in order and return the first refusal.
@@ -234,7 +271,7 @@ def evaluate(
 
     for verdict in (
         check_options_level(strategy, options_trading_level),
-        check_liquidity(contract, snapshot),
+        check_liquidity(contract, snapshot, quote_source),
         check_coverage(
             side, contract.get("type", ""), contracts, shares_held,
             cash_available, float(contract.get("strike", 0.0)), mandate,

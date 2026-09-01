@@ -40,7 +40,9 @@ from shield_ai.data.alpaca_client import ShieldDataClient, AlpacaConfigError
 from shield_ai.quant.risk import build_risk_report, log_returns
 from shield_ai.quant.garch import forecast_volatility, compute_edge
 from shield_ai.agents.sentiment import assess
-from shield_ai.agents.risk_manager import decide_action, build_proposal
+from shield_ai.agents.risk_manager import (
+    decide_action, build_proposal, select_contract,
+)
 from shield_ai.execution import policy
 from shield_ai.execution.audit import (
     AuditLog, DecisionRecord, TradeRecord, _utc_now,
@@ -134,10 +136,28 @@ def run_cycle(client: ShieldDataClient, log: AuditLog, execute: bool) -> dict:
             print("  no implied volatility returned — chain unusable")
             continue
 
-        # Reference IV: the contract closest to our target delta.
-        atm_iv = float(np.median([s["implied_volatility"] for s in snaps.values()]))
+        # Reference IV must come from ONE delta-matched contract, never from a
+        # summary across the chain.
+        #
+        # Options exhibit a volatility smile: far out-of-the-money puts trade at
+        # materially higher implied volatility than at-the-money ones, because
+        # they are crash insurance. A median across the whole chain therefore
+        # sits well above the at-the-money level and produces a large phantom
+        # edge against the GARCH forecast — the agent would "discover" rich
+        # premium that exists only in the skew, not in the pricing.
+        #
+        # Comparing a GARCH forecast to an IV number is only meaningful when the
+        # IV belongs to the contract we would actually trade.
+        ref = select_contract(contracts, snaps, MANDATE.target_short_delta)
+        if ref is None:
+            print("  no contract with a usable delta — skipping")
+            continue
+        ref_contract, ref_snap = ref
+        atm_iv = float(ref_snap["implied_volatility"])
         edge = compute_edge(atm_iv, fc)
 
+        print(f"  ref {ref_contract['symbol']} K={ref_contract['strike']:.0f} "
+              f"delta {ref_snap['delta']:+.2f}")
         print(f"  IV {atm_iv:.1%}   GARCH {fc.annualized_vol:.1%}   "
               f"edge {edge.edge_points:+.1f} pts   "
               f"{len(contracts)} contracts, {len(snaps)} priced")
@@ -196,6 +216,7 @@ def run_cycle(client: ShieldDataClient, log: AuditLog, execute: bool) -> dict:
             shares_held=shares_held,
             options_trading_level=acct.options_trading_level,
             mandate=MANDATE,
+            quote_source=client.options_feed.value,
         )
 
         if not gate.allowed:
