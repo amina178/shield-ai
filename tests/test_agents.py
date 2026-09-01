@@ -209,6 +209,27 @@ def test_build_proposal_holds_when_budget_is_zero():
     print(f"  no headroom -> {p.action}: {p.rationale[-40:]}  ✓")
 
 
+def test_selection_refuses_a_far_off_delta():
+    """
+    Regression: the SPY case from the first live run.
+
+    Only far out-of-the-money contracts were priced, so "closest available"
+    returned a 3-delta option against a 20-delta target. Its IV sits far out on
+    the volatility smile, and comparing that to a GARCH forecast manufactures an
+    edge that does not exist. The selector must return nothing instead.
+    """
+    far_only = [{"symbol": "SPY_P600", "strike": 600.0, "type": "put",
+                 "dte": 7, "open_interest": 90}]
+    snaps = {"SPY_P600": {"delta": -0.03, "bid": 0.10, "ask": 0.12,
+                          "implied_volatility": 0.163}}
+
+    assert select_contract(far_only, snaps, target_delta=0.20) is None
+    # But it is accepted when the target itself is that far out.
+    assert select_contract(far_only, snaps, target_delta=0.05) is not None
+    print("  3-delta contract vs 20-delta target -> refused")
+    print("  same contract vs 5-delta target     -> accepted  \u2713")
+
+
 # ---------------------------------------------------------------------------
 
 def main() -> int:
@@ -230,6 +251,7 @@ def main() -> int:
         ("Sizing caps at half the headroom", test_sizing_never_exceeds_half_the_headroom),
         ("Proposal built end to end", test_build_proposal_end_to_end),
         ("Proposal holds with no budget", test_build_proposal_holds_when_budget_is_zero),
+        ("Selection refuses a far-off delta (regression)", test_selection_refuses_a_far_off_delta),
     ]
 
     failures = 0

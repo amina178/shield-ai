@@ -100,6 +100,7 @@ def select_contract(
     snapshots: dict[str, dict],
     target_delta: float,
     prefer_put: bool = True,
+    max_delta_distance: float = 0.10,
 ) -> tuple[dict, dict] | None:
     """
     Choose the contract whose delta is closest to the target.
@@ -113,6 +114,14 @@ def select_contract(
     Contracts without a usable quote are skipped here rather than passed on —
     an unpriceable contract cannot be sized, and letting it through would only
     move the failure further down the pipeline.
+
+    `max_delta_distance` guards against "closest available" silently becoming
+    "nowhere near". If only far out-of-the-money contracts are priced, the
+    nearest one might be a 3-delta lottery ticket whose implied volatility sits
+    far out on the smile — comparing THAT to a GARCH forecast produces a
+    phantom edge, which is exactly the failure this selection is meant to
+    prevent. Better to return nothing and log a refusal than to trade on a
+    reference the maths does not support.
     """
     best: tuple[float, dict, dict] | None = None
 
@@ -132,6 +141,8 @@ def select_contract(
             best = (distance, c, snap)
 
     if best is None:
+        return None
+    if best[0] > max_delta_distance:
         return None
     return best[1], best[2]
 
