@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 from dataclasses import dataclass
 
 import pandas as pd
@@ -38,6 +39,30 @@ from alpaca.trading.requests import GetOptionContractsRequest
 
 class AlpacaConfigError(RuntimeError):
     """Raised when credentials are missing or the account is not what we expect."""
+
+
+def _is_option(position) -> bool:
+    """
+    True when a broker position is an option rather than a stock.
+
+    Alpaca reports the class as the enum `AssetClass.US_OPTION`, so `str()` of it
+    is "AssetClass.US_OPTION" — UPPERCASE. An earlier version of this check tested
+    `.endswith("option")` in lowercase and therefore never matched, which let every
+    option contract fall through into the equity book. The risk engine then treated
+    it as a linear position and beta-weighted it like a stock, which is wrong twice
+    over: an option's exposure is its delta, not its market value, and that delta
+    moves with the underlying.
+
+    Matching on the OCC symbol shape as well makes the check independent of how the
+    SDK spells the enum: an OCC contract symbol is the underlying followed by
+    6 digits of date, a C or P, and 8 digits of strike — at least 15 characters
+    ending in exactly that pattern.
+    """
+    cls = str(getattr(position, "asset_class", "")).lower()
+    if "option" in cls:
+        return True
+    sym = str(getattr(position, "symbol", ""))
+    return bool(re.fullmatch(r"[A-Z]{1,6}\d{6}[CP]\d{8}", sym))
 
 
 @dataclass(frozen=True)
@@ -136,7 +161,7 @@ class ShieldDataClient:
         """
         rows: dict[str, float] = {}
         for p in self.trading.get_all_positions():
-            if str(getattr(p, "asset_class", "")).endswith("option"):
+            if _is_option(p):
                 continue
             rows[p.symbol] = float(p.market_value or 0)
         return pd.Series(rows, dtype=float)
@@ -145,7 +170,7 @@ class ShieldDataClient:
         """Open option positions, kept separate from the equity book."""
         out = []
         for p in self.trading.get_all_positions():
-            if str(getattr(p, "asset_class", "")).endswith("option"):
+            if _is_option(p):
                 out.append({
                     "symbol": p.symbol,
                     "qty": float(p.qty or 0),
