@@ -97,15 +97,53 @@ directly, which is the split Alpaca's own engineering team recommended.
 
 ---
 
+## The official competition run
+
+The scoring window ran **Mon 31 Aug 09:30 ET → Fri 4 Sep 09:30 ET**, and the rules require a
+clean paper account with no pre-existing positions. Shield-AI was developed and debugged on a
+separate testing account; the account below was created fresh at $100,000 for the official run,
+which means the measured window is **one session plus one overnight gap**.
+
+That constraint suits the thesis rather than fighting it. With the window closing at Friday's
+opening bell, essentially all of the remaining risk is a single overnight gap — precisely the move
+a delta-based model underestimates and precisely what a protective put exists to bound.
+
+| | |
+|---|---|
+| Starting equity | $100,000.00 |
+| Book | 6 inverse-volatility weighted equity positions, 54.2% invested |
+| Portfolio VaR at seeding | 1.142% ($1,142) against a 2.00% mandate |
+| Net beta-weighted delta | 0.431, inside the 0.30–0.85 band |
+| Hedge placed | 3× `NVDA260911P00220000` @ 1.19 — order `acbd143b-46d6-4727-bc68-ab2feda45837` |
+
+The hedge fired because GARCH forecast 42.2% realised volatility on NVDA while the options implied
+only 34.1%: protection was eight volatility points cheap.
+
+Three names were refused in the same cycle, each with its reason written to the log:
+
+- **MSFT** — edge −14.6 points, the most attractive signal of the cycle, blocked because open
+  interest of 429 fell below the liquidity floor. An option you cannot exit in a crisis is not a
+  hedge, and a rich signal does not change that.
+- **XOM** — same gate, open interest 535.
+- **AAPL, JPM** — edge inside the ±4 point no-trade band.
+- **SPY** — no contract close enough to the target delta for the reference IV to be meaningful.
+
+The liquidity threshold was set before the run and deliberately **not** relaxed once it began
+blocking attractive trades. Loosening a risk parameter after seeing it refuse a trade you wanted is
+the exact failure this project is built to prevent.
+
 ## Evidence
 
 A trading agent that cannot prove what it did is a story, not a system. Three artifacts:
 
 | Artifact | What it proves |
 |---|---|
-| `logs/decisions.jsonl` | Every decision **including refusals** — a premium sale declined on an earnings veto is direct evidence the guardrails work |
+| `logs/decisions.jsonl` | Every decision **including refusals** — a hedge declined on a liquidity gate is direct evidence the guardrails work |
 | `logs/trades.jsonl` | Live orders with the **broker-assigned order ID**, reconcilable against the Alpaca account |
 | Tearsheet | Sharpe (excess of risk-free), Sortino (downside deviation only), max drawdown, profit factor |
+
+A snapshot of the official run's logs is committed under [`docs/run-2026-09-03/`](docs/) so the
+decision trail can be read without running anything.
 
 A log containing only executed trades proves the agent traded. A log containing refusals proves the
 agent had judgement.
